@@ -60,9 +60,9 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 #define VIOLET 0x5
 #define WHITE 0x7
 
-#define LCDWidth  19                // 16 character wide LCD (referenced 0-15), 20 character wide LCD (referenced 0-19)
-#define LCDHeight 3                 // Number of rows on the LCD display: 2 rows = 1, 3 rowns = 2, 4 rows = 3
-#define PilotsInDistance   5        // Define the number of pilots the program is score in distance, mostly dependant on the LCD screen.
+#define LCDWidth  15                // 16 character wide LCD (referenced 0-15), 20 character wide LCD (referenced 0-19)
+#define LCDHeight 1                 // Number of rows on the LCD display: 2 rows = 1, 3 rowns = 2, 4 rows = 3
+#define PilotsInDistance   4        // Define the number of pilots the program is score in distance, mostly dependant on the LCD screen.
                                     // 16 char wide LCD = 4 pilots, 20 char wide LCD = 5 pilots 
                                     // Arduino board also puts up limits. Boards with Uno pin configuration (14 digital and 6 Analog), 
                                     // can only manage 5 pilots 20-4 (2 pins reserved for Serial comm, and 2 pins for I2C comm to LCD)
