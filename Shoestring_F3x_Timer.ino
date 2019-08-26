@@ -6,7 +6,13 @@
 // This program is used to time flight for F3B, F3F (planned), F3J and F5J (planned)
 // RC model competition flights
 // 
-// Version 1.0 - Build 1
+// Version 1.0.1 - Build 1
+//----------------------------------------------------------------------------------------------
+// Change Log
+// 1.0.1 - Corrected rounding error in Speed displayed time.
+//         In Distance, added a + sign indicated the pilot have passed the A-Gate out of course first time after launch.
+//         Adjusting the TimerConstant for the Worktime Timer. 
+//
 //----------------------------------------------------------------------------------------------
 // Layout of sketch:
 // the Loop function reads changes. i.e. buttons, and timers, and reacts to changes to these
@@ -60,16 +66,19 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 #define VIOLET 0x5
 #define WHITE 0x7
 
-#define LCDWidth  15                // 16 character wide LCD (referenced 0-15), 20 character wide LCD (referenced 0-19)
-#define LCDHeight 1                 // Number of rows on the LCD display: 2 rows = 1, 3 rowns = 2, 4 rows = 3
-#define PilotsInDistance   4        // Define the number of pilots the program is score in distance, mostly dependant on the LCD screen.
+#define LCDWidth         19         // 16 character wide LCD (referenced 0-15), 20 character wide LCD (referenced 0-19)
+#define LCDHeight         3         // Number of rows on the LCD display: 2 rows = 1, 3 rowns = 2, 4 rows = 3
+#define PilotsInDistance  5         // Define the number of pilots the program is score in distance, mostly dependant on the LCD screen.
                                     // 16 char wide LCD = 4 pilots, 20 char wide LCD = 5 pilots 
                                     // Arduino board also puts up limits. Boards with Uno pin configuration (14 digital and 6 Analog), 
                                     // can only manage 5 pilots 20-4 (2 pins reserved for Serial comm, and 2 pins for I2C comm to LCD)
                                     // 10 pins for buttons and 5 for pilot signals + 1 for separate Start/Stop signal
 
 // ---- Line below used for the Arduino Uno based interrupt timer
-#define TimerConstant    15624      // = (16*10^6) / (1*1024) - 1 (must be <65536)  <- This is the frequency for 1 second on Arduino Uno
+//#define TimerConstant    15624    // = (16*10^6) / (1*1024) - 1 (must be <65536)   - 15624 according to the documentation I found.
+                                    // However on my two Unos this runs the timer too slow. 
+                                    // 0.2%, or 1,5 second for the 12 min Duration work time. 
+#define TimerConstant    15620      // So this is the constant I have tested out working on my Arduino Unos.
 
 // Define Signal time lengths
 #define SignalTimeStart    1000     // time in ms that the Start signal will sound
@@ -104,6 +113,7 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 
 // defining Working times for different tasks
 #define c_preparationTime      300  // Preparation time before Working time starts (defaul 5 minutes according to rules).
+#define c_preparationTimeF3F   180  // Preparation time for F3F before Working time starts (defaul 3 minutes according to rules).
 #define c_workingTimeDuration  720
 #define c_scoringTimeDuration  600
     // Time rules for Distance; within a 7 minute working time, the pilot shall fly a maximum 4 minute flight, coverting as mant laps as possible
@@ -120,6 +130,8 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
     // Reflights are allowed as long as it is called by the pilot before crossing Gate A towards Gate B for the first time
 #define c_workingTimeSpeed     240
 #define c_inAirPrepTime        60    // 60 seconds from release until the model must have started the timed flight, or else a relaunch is required.
+#define c_LaunchTimeF3F        30    // 30 seconds from Start signal to model is released and starts the InAir prep time.
+#define c_inAirPrepTimeF3F     30    // 30 seconds from release until the model must have started the timed flight.
 #define c_workingTimeF3J_10    600
 #define c_workingTimeF3J_15    900
 
@@ -132,11 +144,12 @@ int gv_workingTime = 0;                           // The Working Time for the ta
 int gv_workingTimeSelected = 0;                   // used in the countdown of the Working time.
 int gv_countingTime = 0;                          // To keep track of the elapsed Working Time by counting down
 unsigned long gv_completedTaskTime = 0;           // The scoring time for the pilot in timed speed flights
-unsigned long gv_lapTimer[10];                    // individual lap times
+unsigned long gv_lapTimer[12];                    // individual lap times
 int gv_startingTime[PilotsInDistance+2];          // Timer counter for pilot in distance, only using 1-5
 int gv_taskTimeDist[PilotsInDistance+2];          // To keep track of the elapsed Pilot Time in Distance by counting down, only using 1-5
 int gv_outGatePassed[PilotsInDistance+2];         // used to indicate first passage out of course after launch in Speed and Distance, only using 1-5
 int gv_lapCounterSpeed = 0;                       // keeping count of the number of times the Gate buttons have been pressed during Speed task. 
+int gv_lapCounterF3F = 0;                         // keeping count of the number of times the Gate buttons have been pressed during F3F task. 
 int gv_lapCounterDist[PilotsInDistance+2];        // counting the number of laps pilot 1 have completed in Distance, only using 1-5
 bool gv_inDistance[PilotsInDistance+2];           // used to indicate if the pilot is in active distance task, only using 1-5
 int gv_Gate[PilotsInDistance+2];                  // used to keep track if A- or B-Gate Button was pressed last A=0 : B=1, only using 1-5
@@ -145,9 +158,16 @@ unsigned long gv_signalTimer[PilotsInDistance+3]; // used to specify how long th
 int gv_signalActive[PilotsInDistance+3];          // to keep track of active signals, 0 = no signal : 1 = signal active : -1 = short block in signal
 int gv_signalStart[10];                           // to mark if a signal should be started
 int iDist = 0;                                    // Counter for used in distance related actions
+int gv_F3Fmode = 0;                               // Used to keep track of the different pahes during the timed run in F3F
 int gv_inAirPrepTime = 0;                         // used to keep track of the 60 second limit before the timed speed run must start.
 int gv_countingInAirPrepTime = 0;                 // ditto
 bool gv_inAirPrepTimeStarted = false;             // used to keep track if the 60 second limit is started.
+int gv_LaunchTimeF3F = 0;                         // used to keep track of the 30 second limit for the pilot to launch.
+int gv_countingLaunchTimeF3F = 0;                 // ditto
+bool gv_LaunchTimeF3FStarted = false;             // used to keep track if the 30 second limit is started.
+int gv_inAirPrepTimeF3F = 0;                      // used to keep track of the 30 second limit before the timed speed run must start.
+int gv_countingInAirPrepTimeF3F = 0;              // ditto
+bool gv_inAirPrepTimeF3FStarted = false;          // used to keep track if the 30 second limit is started.
 volatile unsigned long gv_interruptTimer = 0;     // used to temporary store millis inside the Pilot1-A-Gate ISR
 int gv_signalBlip = 6;                            // tracking signal blips during the last 5 seconds of WT in duration
 unsigned long gv_doubleSignalBlip = 4294967295;   // used when needing to double-signal
@@ -215,8 +235,8 @@ int buttonP5BBlock = 0;
 
 void setup()
 {
-  Serial.begin(115200); //set up serial communication
-
+//  Serial.begin(115200); //set up serial communication
+  Serial.begin(1200); //set up serial communication
 //****************************************************************
 // set up the LCD's number of columns and rows and backlight color: 
   lcd.begin(LCDWidth+1, LCDHeight+1);  //Initiate LCD and write Welcome splash screen
@@ -300,6 +320,7 @@ void setup()
     gv_inDistance[i] = false;
     gv_Gate[i] = -1;             // 0 and 1 are used in program. Set to -1 to handle start of task
     gv_GateLast[i] = -1;         // 0 and 1 are used in program. Set to -1 to handle start of task
+    gv_F3Fmode = 0;              // Reset F3F mode to pre-Launch
   }
   for (int i=0; i <= PilotsInDistance+3 ; i++)
   {
@@ -430,7 +451,8 @@ void loop()
       gv_Gate[1] = 0;                            // Pilot 1: A-Gate Button pressed
       if (gv_signalActive[1] == 1 && gv_outGatePassed[1] == 1 && gv_Gate[1] != gv_GateLast[1] ){ gv_signalActive[1] = -1; gv_doubleSignalBlip = millis() +  SignalBlip; } 
       if (gv_task == 2) { Distance(1); }
-      else if (gv_task == 3){ Speed(gv_interruptTimer); } }
+      else if (gv_task == 3){ Speed(gv_interruptTimer); } 
+      else if (gv_task == 4){ Slope(gv_interruptTimer); } }
     else if (gv_competitionMode == 0) { gv_signalStart[1] = 1; }
   }
   if (buttonP1BRead && !buttonP1BPressed && !buttonP1BBlock) { //only run this once if the button is pressed, until it has been released
@@ -440,7 +462,8 @@ void loop()
     if (gv_competitionMode == 2) {
       gv_Gate[1] = 1;                            // Pilot 1: B-Gate Button pressed
       if (gv_task == 2) { if (gv_outGatePassed[1] == 1) { Distance(1); } }
-      else if (gv_task == 3){ if (gv_lapCounterSpeed >=1) { Speed(lv_timer); } } } // Only accept this button if pilot as entered a timed run in Speed
+      else if (gv_task == 3){ if (gv_lapCounterSpeed >=1) { Speed(lv_timer); } }  // Only accept this button if pilot as entered a timed run in Speed
+      else if (gv_task == 4){ Slope(lv_timer); } } 
     else if (gv_competitionMode == 0) { gv_signalStart[1] = 1; }
   }
   if (buttonP2ARead && !buttonP2APressed && !buttonP2ABlock) { //only run this once if the button is pressed, until it has been released
@@ -451,7 +474,8 @@ void loop()
       gv_Gate[2] = 0;                            // Pilot 2: A-Gate Button pressed
       if (gv_signalActive[2] == 1 && gv_outGatePassed[2] == 1 && gv_Gate[2] != gv_GateLast[2] ){ gv_signalActive[2] = -1; gv_doubleSignalBlip = millis() +  SignalBlip; } 
       if (gv_task == 2) { Distance(2); } 
-      else if (gv_task == 3){ SpeedInAirPrepTime(); } }  // Used to track 60 second in-air time for speed task
+      else if (gv_task == 3){ SpeedInAirPrepTime(); }                                          // Used to track 60 second in-air time for speed task
+      else if (gv_task == 4 && gv_F3Fmode == 0){ F3FInAirPrepTime(); } }   // Used to track 30 second in-air time for speed task
     else if (gv_competitionMode == 0) { gv_signalStart[2] = 1; }
   }
   if (buttonP2BRead && !buttonP2BPressed && !buttonP2BBlock) { //only run this once if the button is pressed, until it has been released
@@ -598,7 +622,9 @@ void loop()
     unsigned long lv_currentTime5B = millis();
     if (buttonP5BBlock == 1 && lv_currentTime5B - buttonP5BBlockStart >= c_buttonBlock) { buttonP5BBlock = 0; }
   }
-  
+debugln(gv_competitionMode);  
+
+
 
 // ****************************************
 // Start of logic to manage Task actions
@@ -669,6 +695,188 @@ void ISRButtonP1A()
 
 
 
+
+
+
+
+void Slope(unsigned long lv_timer)
+{
+  lcd.setCursor(gv_lapCounterF3F+6,1);
+  lcd.print(gv_lapCounterF3F);
+  
+  if (gv_F3Fmode >= 1) {
+    if (gv_Gate[1] != gv_GateLast[1])      // Check that this is not the same gate as last signal, only alternating signalling allowed between A- and B-Gates
+    {
+      if (gv_lapCounterF3F <= 9) {                  // Used for the first 9 laps 
+        gv_lapTimer[gv_lapCounterF3F] = lv_timer;   // individual lap times
+        gv_lapCounterF3F++;
+        gv_signalStart[1] = 1;                      // normal turn signal
+      }
+      if (gv_lapCounterF3F == 10) {
+        gv_lapTimer[gv_lapCounterF3F] = lv_timer;   // individual lap times
+        gv_lapCounterF3F++;
+        gv_signalStart[1] = 1;                      // second to last gate turn signal
+      }
+      if (gv_lapCounterF3F >= 11) {
+        gv_lapTimer[gv_lapCounterF3F] = lv_timer;   // individual lap times
+        gv_lapCounterF3F++;
+        gv_signalStart[1] = 1;                      // End-of-task signal
+      }
+      gv_GateLast[1] = gv_Gate[1];
+    }    
+  }
+  lcd.setCursor(gv_lapCounterF3F+6,1);
+  lcd.print(gv_lapCounterF3F);
+}
+
+void F3FLaunchTime()                    // This function is run to start the counting of the 30 seconds Launch time
+{
+  if (gv_LaunchTimeF3FStarted == false) {
+    gv_F3Fmode = 1;
+    gv_countingInAirPrepTimeF3F = gv_countingTime;
+    gv_LaunchTimeF3FStarted = true;
+  }
+}
+void F3FInAirPrepTime()                    // This function is run to start the counting of the 30 seconds In-Air preparation time
+{
+  if (gv_inAirPrepTimeF3FStarted == false) {
+    gv_F3Fmode = 2;
+    gv_countingInAirPrepTimeF3F = gv_countingTime;
+    gv_inAirPrepTimeF3FStarted = true;
+    gv_outGatePassed[1] = 1;          // Set up course for timed run
+    gv_GateLast[1] = 1;
+    gv_Gate[1] = 0;
+    gv_LaunchTimeF3FStarted = false;
+  }
+}
+
+void F3F()
+{
+  float s,ms;
+  int s1,ms1,j,k;
+  unsigned long lv_lapTime = 0;
+
+  if (gv_lapCounterF3F == 1) {                                                          // Change F3F mode to timed run
+    gv_F3Fmode = 3; 
+    gv_inAirPrepTimeF3FStarted = false;
+  }
+
+  if ( gv_F3Fmode == 1 ) {                                                               // check if pilot is in the 30 second Launch time 
+    if (gv_LaunchTimeF3F > 0) {                                                          // Only count to 0
+      gv_LaunchTimeF3F = c_LaunchTimeF3F + gv_countingLaunchTimeF3F - gv_countingTime;   // Compensate for later start of timer
+    }
+    if (gv_LaunchTimeF3F <= 0) {                                                          // If LaunchTimer has reached 0 - abort flight.
+      gv_F3Fmode = 5;                                                                     // Set F3F mode to Flight cancelled 
+      gv_lapCounterF3F = 11;                                                              // abort by setting the lap counter to completed.
+    }
+  }
+
+  if (gv_F3Fmode == 2 ) {                                                                   // check if pilot is in the 30 In-Air prep time 
+    if (gv_inAirPrepTimeF3F > 0) {                                                          // Only count to 0
+      gv_inAirPrepTimeF3F = c_inAirPrepTimeF3F + gv_countingInAirPrepTimeF3F - gv_countingTime;   // Compensate for later start of timer
+      gv_LaunchTimeF3FStarted = false;                                                      // reset the Launch timer check
+    }
+  }
+
+  if (gv_competitionMode == 2)              
+  {
+    if (gv_inAirPrepTimeF3F < 10)             // This is just to get the In-Air Prep time diplayed nice as it counts down
+    {
+      if (gv_inAirPrepTime == 9) 
+      {
+        lcd.setCursor(3,1);
+        lcd.print(" ");
+      }
+      lcd.setCursor(4,1);
+    }
+    if (gv_inAirPrepTimeF3F > 9) 
+    {
+      lcd.setCursor(3,1);
+    }
+    lcd.print(gv_inAirPrepTimeF3F);             // Stop displaying In-Air Prepr Time after it has reached 0
+    if (gv_inAirPrepTimeF3FStarted == true && gv_inAirPrepTimeF3F <= 0)     // check if the 30 second In-Air prep time has passed
+    {                                                                       // if the In-Air prep time has passed without the pilot has entered the course, automaticaly start the timed run
+      gv_lapTimer[gv_lapCounterF3F] = millis(); // Store the automatic start time
+      gv_signalStart[1] = 1;                    // Call signal function to indicate start of timed run
+      gv_lapCounterF3F++;                       // automatic mark first gate as passed
+      gv_GateLast[1] = 0;                       // indicate that the A-Gate has been "passed"
+    }
+    if (gv_lapCounterF3F == 11)                 // Pilot completed F3F Course
+    {
+      gv_competitionMode = 3;                   // Start Result Mode
+    }
+  }  
+
+  
+  if (gv_competitionMode == 3)             // When Task Mode is ended and Result Mode has just started, perform this
+  {
+    LCDMenu3();                                                // Call initial Result display
+    gv_completedTaskTime = gv_lapTimer[10] - gv_lapTimer[0];    // The scoring time for the pilot in timed speed flights
+    s = int(gv_completedTaskTime/1000);                        // converted to seconds and hundreds.
+    s1 = int(s);
+    ms = gv_completedTaskTime%1000;                            // Confession :)
+    ms1 = int(ms)/10;                                          // I am not rounding the thousands to the nearest 1/100
+    if (s1 < 10) { lcd.setCursor(2,1); }                       // just stripping the thousands off. if you need a more accurate speed score
+    else if (s1 > 99) { lcd.setCursor(0,1); }                  // like for FAI WC, maybe a better timing ssytem is recommended.
+    else if (s1 > 9) { lcd.setCursor(1,1); }                   // or help me with the code (or prhaps I'll fix it my self when I have the energy)
+    lcd.print(s1);
+    lcd.setCursor(3,1);
+    lcd.print(".");
+    lcd.setCursor(4,1);
+    lcd.print(ms1);
+    if ( LCDHeight >= 3 )                                      // If using a 4 row LCD display, show each lap time
+    {
+      for (int i=0; i<=3 ;i++)
+      {
+        if (i < 2 ){ k = 2; }  else { k = 3; }                 // just to get the lap times on the correct location
+        if (i == 0 || i == 2){ j=0; }
+        else if (i == 1 || i == 3) { j = 11;}
+        lv_lapTime = gv_lapTimer[i+1] - gv_lapTimer[i];        // print Lap 1 or 3
+        s = int(lv_lapTime/1000);
+        s1 = int(s);
+        ms = lv_lapTime%1000;                                      
+        ms1 = int(ms)/10;                                                    
+        if (s1 < 10) { lcd.setCursor(j+5,k); }                                 
+        else if (s1 > 9) { lcd.setCursor(j+6,k); }                            
+        lcd.print(s1);
+        lcd.setCursor(j+6,k);
+        lcd.print(".");
+        lcd.setCursor(j+7,k);
+        lcd.print(ms1);
+      }
+    }
+    gv_Gate[1] = -1;                        // Resetting counters for next try
+    gv_GateLast[1] = -1;
+    gv_lapCounterF3F = 0;
+    for (int i=0; i < 11; i++) { gv_lapTimer[i] = 0; }
+    gv_LaunchTimeF3FStarted = false;
+    gv_LaunchTimeF3F = 0;
+    gv_countingLaunchTimeF3F = 0;
+    gv_inAirPrepTimeF3FStarted = false;
+    gv_inAirPrepTimeF3F = 0;
+    gv_countingInAirPrepTimeF3F = 0;
+    gv_F3Fmode = 0;              // Reset F3F mode to pre-Launch
+  }
+/* 
+In F3F, there is three times relevant to the pilot
+Firstly the pilot is entitled to a 3 minute Preparation time
+After the preparation time the Starter gives the order to the pilot to start 
+and the pilot or his helper then have 30 seconds to launch the model. 
+If the pilot fails to launch the plane within these 30 seconds the flight have been not completed, giving 0 points.
+After the launch, the pilot have 30 seconds to place his model before entering the course.
+The Time starts to be measued when the pilot passes Base A towards Base B for the first time.
+If the pilot have not entered the course within the 30 seconds the Flight Times starts 
+when the 30 seconds has ended, regardless that the model have not entered the course.
+There is no working time for the task.
+*/
+}
+
+
+
+
+
+
+
    // *************************************************************
    // Function section to handle the display and selections therein
    //**************************************************************
@@ -727,8 +935,8 @@ void LCDMenu0()
       case 40:
         lcd.setCursor(0,0);
         lcd.print("F3F            ");
+        gv_prepTimeMod = c_preparationTimeF3F;
         gv_prepTime = gv_prepTimeMod;
-  //      gv_workingTime = c_workingTimeF3F;          To be modified for F3F
         gv_task = 4;
         break;
       case 50:
@@ -961,6 +1169,15 @@ if (gv_competitionMode == 2)
       if (gv_invertCourse){ lcd.print('i'); }        // Used to Indicate on top-right screen that Inverted Course is selected in menu
       else { lcd.print(' '); }      
     }
+    else if (gv_task == 4)
+    {
+      lcd.setCursor(0,0);
+      lcd.print("LT ");
+      lcd.setCursor(3,0);
+      lcd.print("TS ");
+      lcd.setCursor(6,0);
+      lcd.print("Lap #");
+    }
     else if (gv_task == 5)
     {
       lcd.setCursor(0,0);
@@ -988,15 +1205,15 @@ void LCDButtons2(int lv_menuButton)
 if (gv_competitionMode == 2)
   {                                   // Task Mode LCD menu actions
 // check for manual end of Task Mode
-    if (gv_taskTimeInterrupt == 0)                     // if a menu button is initially pressed during Preparation Mode 
+    if (gv_taskTimeInterrupt == 0)                    // if a menu button is initially pressed during Preparation Mode 
     {
-      if (gv_task != 2 && gv_task != 3 )               // Display End Task unless it is in Distance or Speed Task
+      if (gv_task != 2 && gv_task != 3 )              // Display End Task unless it is in Distance or Speed Task
       {
         gv_taskTimeInterrupt = 1;
         lcd.setCursor(0,0);
         lcd.print("End Task?  NO  ");
       }
-      else if ( gv_task == 3 )               // Display End Task unless it is in Distance or Speed Task
+      else if ( gv_task == 3 )                        // Display End Task unless it is in Distance or Speed Task
       {
         gv_taskTimeInterrupt = 1;
         lcd.setCursor(0,0);
@@ -1295,9 +1512,6 @@ if (gv_competitionMode == 3)
     {
       lcd.setCursor(0,0);
       lcd.print("Result:        ");
-      lcd.setCursor(LCDWidth,0);
-      if (gv_invertCourse){ lcd.print('i'); }        // Used to Indicate on top-right screen that Inverted Course is selected in menu
-      else { lcd.print(' '); }
     }
   if (gv_task == 5)
     {
@@ -1381,38 +1595,40 @@ if (gv_competitionMode == 1)
     if (gv_prepTimeCounter > 99)
     {
       lcd.setCursor(3,1);
-    }                                      // Until here (see above)
+    }                                            // Until here (see above)
     lcd.print(gv_prepTimeCounter);
     if (gv_prepTimeCounter <= 0) 
     { 
-      gv_competitionMode = 2;              // Start Task Mode
+      gv_competitionMode = 2;                    // Start Task Mode
+      if (gv_task == 4) {F3FLaunchTime();}    // If Task = F3F, initiate Launch Timer
       lcd.clear();
-      gv_countingTime = 0;                 // Resetting counting timer
-      LCDMenu2();
+      gv_countingTime = 0;                       // Resetting counting timer
+      LCDMenu2(); 
     }
+    if (gv_task == 4) {gv_invertCourse = false;} // Inverted course not used for F3F, resetting selection
   }
-if (gv_competitionMode == 2)               // When Perparation Time is ended and Competition Mode has just started, reset counters
+if (gv_competitionMode == 2)                     // When Perparation Time is ended and Competition Mode has just started, reset counters
   {
     if (gv_task == 1)
     {
       gv_workingTime = gv_workingTimeSelected;
       lcd.setCursor(6,1);
       lcd.print(gv_workingTime);
-       gv_signalStart[0] = 1;                   // Call signal function to sound Start of Task 
-      gv_countingTime = 0;             // Reset Countingtime
+       gv_signalStart[0] = 1;                    // Call signal function to sound Start of Task 
+      gv_countingTime = 0;                       // Reset Countingtime
     }
     else if (gv_task == 2)
     {
       gv_workingTime = gv_workingTimeSelected;
-       gv_signalStart[0] = 1;                   // Call signal function to sound Start of Task
-      gv_countingTime = 0;             // Reset Countingtime
+       gv_signalStart[0] = 1;                    // Call signal function to sound Start of Task
+      gv_countingTime = 0;                       // Reset Countingtime
     }
     else if (gv_task == 3)
     {
       gv_workingTime = gv_workingTimeSelected;
       gv_inAirPrepTime = c_inAirPrepTime;
-       gv_signalStart[0] = 1;                   // Call signal function to sound Start of Task
-      gv_countingTime = 0;             // Reset Countingtime
+       gv_signalStart[0] = 1;                    // Call signal function to sound Start of Task
+      gv_countingTime = 0;                       // Reset Countingtime
     }
     
   }
@@ -1475,7 +1691,7 @@ void F3B_T()
       if (gv_signalBlip > 1) { gv_signalStart[7] = 1; }          // Call signal function to sound last 5 seconds blip
       gv_signalBlip = 1;     }
   }
-  if (gv_competitionMode == 3)               // When Task Mode is ended and Result Mode has just started, perform this
+  if (gv_competitionMode == 3)                                   // When Task Mode is ended and Result Mode has just started, perform this
   {
     LCDMenu3();
     gv_signalBlip = 6;
@@ -1487,35 +1703,37 @@ void Distance(int lv_pilot)
   int lv_lcdLocation = 0;
   if (lv_pilot <= PilotsInDistance)
   {
-    lv_lcdLocation = (lv_pilot-1) * 3;                // Set the LCD location correct for reporting number of laps
+    lv_lcdLocation = (lv_pilot-1) * 3;                           // Set the LCD location correct for reporting number of laps
     if (gv_outGatePassed[lv_pilot] == 1) 
-    {             // Check if the passage is during timed task (not the first pass out after launch before task start)
+    {                                                            // Check if the passage is during timed task (not the first pass out after launch before task start)
       if (gv_Gate[lv_pilot] != gv_GateLast[lv_pilot]) 
-      {       // Check that this is not the same gate as last signal, only alternating signalling allowed between A- and B-Gates
+      {                                                          // Check that this is not the same gate as last signal, only alternating signalling allowed between A- and B-Gates
         if (gv_lapCounterDist[lv_pilot] <= 0 && gv_inDistance[lv_pilot] == false)    // if counter is zero, then this is the first A-gate passage into the course, time to start the Pilot timer
         {
           gv_inDistance[lv_pilot] = true;
-          gv_startingTime[lv_pilot] = gv_countingTime;    // value to keep track on the offset between the Counter Timer and the pilot start of timed flight
+          gv_startingTime[lv_pilot] = gv_countingTime;           // value to keep track on the offset between the Counter Timer and the pilot start of timed flight
           gv_taskTimeDist[lv_pilot] = c_scoringTimeDistance + gv_startingTime[lv_pilot] - gv_countingTime;  // set initial pilot task time in seconds
         }
-        if (gv_taskTimeDist[lv_pilot] > 0)          // Check if the pilot still have Flight time left
+        if (gv_taskTimeDist[lv_pilot] > 0)                      // Check if the pilot still have Flight time left
         {
           gv_lapCounterDist[lv_pilot]++;
-           gv_signalStart[lv_pilot] = 1;
+          gv_signalStart[lv_pilot] = 1;
           if (gv_lapCounterDist[lv_pilot] >= 0 && gv_lapCounterDist[lv_pilot] <= 9) 
           {
             lcd.setCursor(lv_lcdLocation,1);
-            lcd.print("  ");                // clear restult for single digit
+            lcd.print("  ");                                   // clear restult for single digit
           }
           lcd.setCursor(lv_lcdLocation,1);
-          lcd.print(gv_lapCounterDist[lv_pilot]);        // change to display the pilots lap results
+          lcd.print(gv_lapCounterDist[lv_pilot]);              // change to display the pilots lap results
         }
         gv_GateLast[lv_pilot] = gv_Gate[lv_pilot]; 
       } 
     }
-    else {                                         // Passing A-Gate out of course first time after launch.
-      gv_signalStart[lv_pilot] = 1;                // Signal for passing A-Gate out of course first time
-      gv_outGatePassed[lv_pilot] = 1;              // Set up course for timed run
+    else {                                                     // Passing A-Gate out of course first time after launch.
+      gv_signalStart[lv_pilot] = 1;                            // Signal for passing A-Gate out of course first time
+      gv_outGatePassed[lv_pilot] = 1;                          // Set up course for timed run
+      lcd.setCursor(lv_lcdLocation,1);
+      lcd.print("+");                                         // Prints a + sign indicating the pilot have passed A-Gate out of course first time after launch.
       gv_GateLast[lv_pilot] = 1;
       gv_Gate[lv_pilot] = 0;
       gv_lapCounterDist[lv_pilot]++; 
@@ -1630,7 +1848,7 @@ void Speed(unsigned long lv_timer)
   lcd.print(gv_lapCounterSpeed);
   if (gv_outGatePassed[1] == 1)           // If this is a Gate passage during the timed run
   {
-    if (gv_Gate[1] != gv_GateLast[1])      // Check that this is not the same gate as last signal, only alternating sinalling allowed between A- and B-Gates
+    if (gv_Gate[1] != gv_GateLast[1])      // Check that this is not the same gate as last signal, only alternating signalling allowed between A- and B-Gates
     {
       if (gv_lapCounterSpeed < 5)
       {
@@ -1743,13 +1961,22 @@ void F3B_S()
     ms = gv_completedTaskTime%1000;                            // Confession :)
     ms1 = int(ms)/10;                                          // I am not rounding the thousands to the nearest 1/100
     if (s1 < 10) { lcd.setCursor(2,1); }                       // just stripping the thousands off. if you need a more accurate speed score
-    else if (s1 > 99) { lcd.setCursor(0,1); }                  // like for FAI WC, maybe a better timing ssytem is recommended.
-    else if (s1 > 9) { lcd.setCursor(1,1); }                   // or help me with the code (or prhaps I'll fix it my self when I have the energy)
+    else if (s1 > 99) { lcd.setCursor(0,1); }                  // like for FAI WC, maybe a better timing system is recommended.
+    else if (s1 > 9) { lcd.setCursor(1,1); }                   // or help me with the code (or perhaps I'll fix it myself when I have the energy)
     lcd.print(s1);
     lcd.setCursor(3,1);
     lcd.print(".");
-    lcd.setCursor(4,1);
-    lcd.print(ms1);
+    if (ms1 > 9) {                                             // This section catches the situation where the decimals are
+      lcd.setCursor(4,1);                                      // less than .10 sec (i.e. between .00 - .09)
+      lcd.print(ms1);                                          // This ensures that the leading 0 is displayed.
+    }
+    else if (ms1 < 10) {
+      lcd.setCursor(4,1);
+      lcd.print("0");
+      lcd.setCursor(5,1);
+      lcd.print(ms1);
+    }
+
     if ( LCDHeight >= 3 )                                      // If using a 4 row LCD display, show each lap time
     {
       for (int i=0; i<=3 ;i++)
@@ -1767,8 +1994,16 @@ void F3B_S()
         lcd.print(s1);
         lcd.setCursor(j+6,k);
         lcd.print(".");
-        lcd.setCursor(j+7,k);
-        lcd.print(ms1);
+        if (ms1 > 9) {                                         // This section catches the situation where the decimals are
+          lcd.setCursor(j+7,k);                                // less than .10 sec (i.e. between .00 - .09)
+          lcd.print(ms1);                                      // This ensures that the leading 0 is displayed.
+        }
+        else if (ms1 < 10) {
+          lcd.setCursor(j+7,k);
+          lcd.print("0");
+          lcd.setCursor(j+8,k);
+          lcd.print(ms1);
+        }
       }
     }
     gv_Gate[1] = -1;                        // Resetting counters for next try
@@ -1781,31 +2016,9 @@ void F3B_S()
   }
 }
 
-void F3F()
-/* 
-In F3F, there is three times relevant to the pilot
-Firstly the pilot is entitled to a 3 minute Preparation time
-After the preparation time the Starter gives the order to the pilot to start 
-and the pilot or his helper then have 30 seconds to launch the model.
-After the launch, the pilot have 30 seconds to place his model before entering the course.
-The Time starts to be measued when the pilot passes Base A towards Base B for the first time.
-If the pilot have not entered the course within the 30 seconds the Flight Times starts 
-when the 30 seconds has ended, regardless that the model have not entered the course.
-*/
 
-{
-  gv_workingTime = c_workingTimeSpeed - gv_countingTime;
-  if (gv_competitionMode == 2)              
-    {
-      
-    }
-  if (gv_competitionMode == 3)               // When Task Mode is ended and Result Mode has just started, perform this
-    {
-        // Call initial Result display
-    }
 
-  
-}
+
 
 void F3J_10()  // F3J Prelim 10 min
 {
@@ -1972,9 +2185,8 @@ void SignalGate(int lv_pilot)
       gv_signalTimer[6] = millis() + SignalTimeStop;                            // Mark when the signal starts
       gv_signalActive[6] = 1; }
     else if (gv_signalTimer[6] <= millis()) { digitalWrite(StartStop,LOW); } }   // end the signal after the defined numer of ms
-  if (lv_pilot == 7) {
+  else if (lv_pilot == 7) {
       digitalWrite(StartStop,HIGH); 
       delay(SignalBlip);                     // Normally  this is a BIG no-no, but the blip is only used in non-timed tasks.
       digitalWrite(StartStop,LOW); }
 }
-
